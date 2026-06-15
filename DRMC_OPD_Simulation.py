@@ -1601,7 +1601,7 @@ def main():
     - Central registration (new vs returning patients)
     - Sub-clinic routing and consultation
     - Post-consultation ancillary services
-    - Doctor freeze events (ER/ward interruptions)
+    - Doctor staffing interruptions (ER/ward duty calls)
     """)
     
     st.divider()
@@ -1987,7 +1987,7 @@ def main():
         The simulation model is constructed based on the following key operational assumptions:
         - **Pooled Poisson Arrivals**: Arrivals are pooled Poisson (no per-clinic differentiation).
         - **Consultation Service Time**: Consultation service time is Triangular(5, 15, 45) minutes.
-        - **Doctor Freeze Events**: Emergency or ward duties temporarily reduce physician capacity to 75% for Triangular(180, 240, 300) minutes.
+        - **Doctor Staffing Interruptions**: Emergency or ward duties temporarily reduce physician capacity to 75% for Triangular(180, 240, 300) minutes.
         - **Priority Queue Preemption**: Priority patients preempt the queue but do not interrupt active consultations.
         - **Ancillary Services**: We do not model diagnostic/pharmacy turnaround in detail (out of scope).
         - **Rescheduling**: We do not model late-arrival rescheduling (out of scope).
