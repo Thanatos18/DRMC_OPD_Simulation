@@ -926,7 +926,7 @@ def aggregate_results(results_list: List[KPICollector]) -> Dict[str, Any]:
 def create_sidebar_config():
     """Create and return simulation configuration from sidebar controls."""
     
-    st.sidebar.header("📊 Simulation Configuration")
+    st.sidebar.header("Simulation Configuration")
     
     # Basic Parameters
     st.sidebar.subheader("Basic Parameters")
@@ -953,7 +953,7 @@ def create_sidebar_config():
     st.sidebar.divider()
     
     # Staffing Parameters
-    st.sidebar.subheader("👥 Staffing Configuration")
+    st.sidebar.subheader("Staffing Configuration")
     
     st.sidebar.markdown("**Front-End Staff**")
     config.gate_security_count = st.sidebar.slider(
@@ -1003,7 +1003,7 @@ def create_sidebar_config():
     st.sidebar.divider()
     
     # Arrival Parameters
-    st.sidebar.subheader("📈 Arrival Rates (patients/hour)")
+    st.sidebar.subheader("Arrival Rates (patients/hour)")
     
     config.dawn_surge_rate = st.sidebar.slider(
         "Dawn Surge (5-7 AM)", 20, 60, 40,
@@ -1034,7 +1034,7 @@ def create_sidebar_config():
     st.sidebar.divider()
     
     # Doctor Freeze Parameters
-    st.sidebar.subheader("🧊 Doctor Staffing Interruptions")
+    st.sidebar.subheader("Doctor Staffing Interruptions")
     config.doctor_interruption_frequency = st.sidebar.slider(
         "Interruption Frequency (per day)", 0.5, 3.0, 1.5, 0.5,
         help="How often doctors are pulled to ER/ward duties"
@@ -1059,7 +1059,7 @@ def create_sidebar_config():
     st.sidebar.divider()
     
     # Patient Mix
-    st.sidebar.subheader("👤 Patient Mix")
+    st.sidebar.subheader("Patient Mix")
     config.priority_patient_percentage = st.sidebar.slider(
         "Priority Patient %", 0.10, 0.40, 0.25,
         format="%.2f",
@@ -1079,7 +1079,7 @@ def create_sidebar_config():
     st.sidebar.divider()
     
     # Scenario Configuration
-    st.sidebar.subheader("🎯 Intervention Scenarios")
+    st.sidebar.subheader("Intervention Scenarios")
     st.sidebar.caption("Enable scenarios to test operational improvements")
     
     config.scenario_a_enabled = st.sidebar.checkbox(
@@ -1498,11 +1498,11 @@ def display_scenario_comparison(stored_results: Dict[str, Dict]):
         'Staffing Interruptions': [stored_results[s].get('interruption_events_count', 0) for s in scenarios]
     })
     
-    st.subheader("📊 Scenario Comparison")
+    st.subheader("Scenario Comparison")
     st.dataframe(comparison_df, width="stretch", hide_index=True)
     
     csv = comparison_df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download comparison CSV", csv, "scenario_comparison.csv", "text/csv")
+    st.download_button("Download comparison CSV", csv, "scenario_comparison.csv", "text/csv")
     
     # Visual comparison
     fig = make_subplots(
@@ -1564,7 +1564,6 @@ def main():
     # Page configuration
     st.set_page_config(
         page_title="DRMC OPD Simulation Dashboard",
-        page_icon="🏥",
         layout="wide",
         initial_sidebar_state="expanded"
     )
@@ -1591,7 +1590,7 @@ def main():
     """, unsafe_allow_html=True)
     
     # Header
-    st.title("🏥 DRMC Outpatient Department Patient Flow Simulation")
+    st.title("DRMC Outpatient Department Patient Flow Simulation")
     st.markdown("""
     **Discrete Event Simulation (DES) Model for Davao Regional Medical Center OPD Operations**
     
@@ -1620,13 +1619,13 @@ def main():
     
     # Baseline Scenario Shortcut
     st.sidebar.divider()
-    st.sidebar.subheader("📌 Baseline Run Control")
-    if st.sidebar.button("📌 Save as Baseline", use_container_width=True, help="Lock current configuration and run/save as Baseline scenario"):
+    st.sidebar.subheader("Baseline Run Control")
+    if st.sidebar.button("Save as Baseline", use_container_width=True, help="Lock current configuration and run/save as Baseline scenario"):
         if st.session_state.simulation_results is not None:
             st.session_state.stored_scenarios["Baseline"] = (
                 st.session_state.simulation_results['aggregated']
             )
-            st.sidebar.success("📌 Baseline saved from current run!")
+            st.sidebar.success("Baseline saved from current run!")
         else:
             with st.sidebar.status("Running baseline simulation...") as status:
                 kpi_results = run_simulation(config)
@@ -1637,7 +1636,7 @@ def main():
                     'aggregated': aggregated,
                     'config': config
                 }
-                status.update(label="📌 Baseline simulated and saved!", state="complete")
+                status.update(label="Baseline simulated and saved!", state="complete")
             try:
                 st.rerun()
             except AttributeError:
@@ -1645,10 +1644,10 @@ def main():
     
     # Tab layout
     tab1, tab2, tab3, tab4 = st.tabs([
-        "🚀 Run Simulation", 
-        "📈 Results & Analytics", 
-        "🔄 Scenario Comparison",
-        "📋 Configuration Summary"
+        "Run Simulation", 
+        "Results & Analytics", 
+        "Scenario Comparison",
+        "Configuration Summary"
     ])
     
     with tab1:
@@ -1687,14 +1686,14 @@ def main():
         with col2:
             st.subheader("Quick Actions")
             
-            run_button = st.button("▶️ Run Simulation", type="primary", width="stretch")
+            run_button = st.button("Run Simulation", type="primary", width="stretch")
             
             scenario_name = st.text_input("Scenario Name (for saving)", 
                                           placeholder="e.g., Baseline, Scenario A, etc.")
             
-            save_button = st.button("💾 Save Current Results", width="stretch")
+            save_button = st.button("Save Current Results", width="stretch")
             
-            clear_button = st.button("🗑️ Clear All Saved Scenarios", width="stretch")
+            clear_button = st.button("Clear All Saved Scenarios", width="stretch")
         
         st.divider()
         
@@ -1732,7 +1731,7 @@ def main():
                     'config': config
                 }
                 
-                st.success(f"✅ Simulation completed! Processed {int(aggregated['patients_completed_total'])} patients.")
+                st.success(f"Simulation completed! Processed {int(aggregated['patients_completed_total'])} patients.")
                 
             except Exception as e:
                 st.error(f"Simulation error: {str(e)}")
@@ -1742,7 +1741,7 @@ def main():
         if save_button and st.session_state.simulation_results:
             if scenario_name:
                 st.session_state.stored_scenarios[scenario_name] = st.session_state.simulation_results['aggregated']
-                st.success(f"💾 Scenario '{scenario_name}' saved!")
+                st.success(f"Scenario '{scenario_name}' saved!")
             else:
                 st.warning("Please enter a scenario name before saving.")
         
@@ -1752,7 +1751,7 @@ def main():
             st.info("All saved scenarios cleared.")
     
     with tab2:
-        st.header("📈 Results & Analytics Dashboard")
+        st.header("Results & Analytics Dashboard")
         
         if st.session_state.simulation_results:
             results = st.session_state.simulation_results
@@ -1822,7 +1821,7 @@ def main():
             plot_patient_throughput(kpi)
             
         else:
-            st.info("👈 Run a simulation first to see results!")
+            st.info("Run a simulation first to see results!")
             
             # Show sample/placeholder charts
             st.subheader("Sample Visualization Preview")
@@ -1845,7 +1844,7 @@ def main():
             """)
     
     with tab3:
-        st.header("🔄 Scenario Comparison")
+        st.header("Scenario Comparison")
         
         display_scenario_comparison(st.session_state.stored_scenarios)
         
@@ -1854,7 +1853,7 @@ def main():
             st.subheader("Saved Scenarios Summary")
             
             for name, data in st.session_state.stored_scenarios.items():
-                with st.expander(f"📁 {name}"):
+                with st.expander(f"{name}"):
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Avg LoS", f"{data.get('los_mean', 0):.1f} min")
@@ -1864,7 +1863,7 @@ def main():
                         st.metric("Total Patients", f"{int(data.get('patients_completed_total', 0))}")
     
     with tab4:
-        st.header("📋 Configuration Summary")
+        st.header("Configuration Summary")
         
         st.subheader("Current Simulation Parameters")
         
@@ -1930,10 +1929,10 @@ def main():
             'Scenario': ['A: Front-End Scaling', 'B: Consultation Caps', 
                          'C: No-Show Optimization', 'D: Mid-Week Staffing'],
             'Enabled': [
-                '✅ Yes' if config.scenario_a_enabled else '❌ No',
-                '✅ Yes' if config.scenario_b_enabled else '❌ No',
-                '✅ Yes' if config.scenario_c_enabled else '❌ No',
-                '✅ Yes' if config.scenario_d_enabled else '❌ No'
+                'Yes' if config.scenario_a_enabled else 'No',
+                'Yes' if config.scenario_b_enabled else 'No',
+                'Yes' if config.scenario_c_enabled else 'No',
+                'Yes' if config.scenario_d_enabled else 'No'
             ],
             'Effect': [
                 'Increases verification to 3-4, registration to 5-6',
@@ -1982,7 +1981,7 @@ def main():
     
     # Modeling Assumptions Expander
     st.markdown("---")
-    with st.expander("📌 Modeling Assumptions"):
+    with st.expander("Modeling Assumptions"):
         st.markdown("""
         The simulation model is constructed based on the following key operational assumptions:
         - **Pooled Poisson Arrivals**: Arrivals are pooled Poisson (no per-clinic differentiation).
