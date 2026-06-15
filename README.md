@@ -11,7 +11,7 @@ This simulation models the complete patient journey through DRMC's OPD, from ear
 - **Patient Arrival Modeling**: Poisson arrival process with four distinct phases
 - **Priority Patient Support**: Non-preemptive priority queuing for vulnerable populations
 - **Multi-Stage Process**: Models all stages from pre-opening queue to final exit
-- **Doctor Freeze Events**: Simulates physician interruptions for ER/ward duties
+- **Doctor Staffing Interruptions**: Simulates physician interruptions for ER/ward duties
 - **Interactive Dashboard**: Streamlit-based web UI with real-time visualization
 
 ## Installation
@@ -35,7 +35,7 @@ Then open http://localhost:8501 in your browser.
 - Pre-Opening Queue Build-up
 - Waiting Times by Stage (Gate, Registration, Clinic, Consultation)
 - Total OPD Length of Stay
-- Doctor Freeze Events
+- Doctor Staffing Interruptions
 - Resource Utilization Rates
 - Patient Throughput
 

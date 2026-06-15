@@ -150,8 +150,8 @@ class KPICollector:
     registration_service_times: List[float] = field(default_factory=list)
     consultation_service_times: List[float] = field(default_factory=list)
     
-    # Doctor freeze events
-    doctor_freeze_events: List[Dict] = field(default_factory=list)
+    # Doctor staffing interruption events
+    doctor_interruption_events: List[Dict] = field(default_factory=list)
     
     # Total length of stay
     length_of_stay: List[float] = field(default_factory=list)
@@ -195,11 +195,11 @@ class SimulationConfig:
     midday_rate: float = 38
     afternoon_rate: float = 20
     
-    # Doctor freeze parameters
-    doctor_freeze_frequency: float = 1.5  # per day
-    doctor_freeze_min_duration: int = 180
-    doctor_freeze_mode_duration: int = 240
-    doctor_freeze_max_duration: int = 300
+    # Doctor staffing interruption parameters
+    doctor_interruption_frequency: float = 1.5  # per day
+    doctor_interruption_min_duration: int = 180
+    doctor_interruption_mode_duration: int = 240
+    doctor_interruption_max_duration: int = 300
     
     # Priority patient percentage
     priority_patient_percentage: float = 0.25  # 25%
@@ -242,8 +242,11 @@ class DRMC_OPD_Simulation:
         # Patient counter
         self.patient_counter = 0
         
-        # Track clinic queues for doctor freeze events
+        # Track clinic queues for doctor staffing interruptions
         self.clinic_physicians_active = {clinic: True for clinic in CLINIC_DISTRIBUTION.keys()}
+        
+        # Live counter for pre-opening queue
+        self.active_pre_opening = 0
         
     def _setup_resources(self):
         """Initialize all SimPy resources with configured capacities."""
@@ -326,11 +329,13 @@ class DRMC_OPD_Simulation:
         """Initialize resource utilization tracking."""
         resources = [
             'gate_security', 'verification_staff', 'health_aides',
-            'registration_staff', 'clinic_routing'
+            'registration_staff', 'clinic_routing', 'sub_clinic_nursing', 'physicians'
         ]
         for r in resources:
-            self.kpi.resource_total_time[r] = 0.0
-            self.kpi.resource_busy_time[r] = 0.0
+            if r not in self.kpi.resource_total_time:
+                self.kpi.resource_total_time[r] = 0.0
+            if r not in self.kpi.resource_busy_time:
+                self.kpi.resource_busy_time[r] = 0.0
     
     def triangular_time(self, a: float, b: float, c: float) -> float:
         """Generate random time using triangular distribution (in minutes)."""
@@ -449,6 +454,8 @@ class DRMC_OPD_Simulation:
             
             # Generate patient
             patient = self.generate_patient()
+            if self.env.now < TIME_8AM:
+                self.active_pre_opening += 1
             self.kpi.patients_arrived += 1
             patients_generated += 1
             
@@ -482,6 +489,7 @@ class DRMC_OPD_Simulation:
                 
                 self.kpi.gate_wait_times.append(gate_wait)
                 self.kpi.gate_service_times.append(gate_service)
+                self.kpi.resource_busy_time['gate_security'] += gate_service
             
             # ========== STAGE 2: Verification & Vitals ==========
             # Verification (appointment code / referral slip)
@@ -491,12 +499,14 @@ class DRMC_OPD_Simulation:
                 verification_time = self.triangular_time(0.5, 2.5, 15.0)  # From proposal
                 yield self.env.timeout(verification_time)
                 patient.vitals_time = self.env.now
+                self.kpi.resource_busy_time['verification_staff'] += verification_time
                 
             # Vitals capture
             with self.health_aides.request(priority=patient.priority) as req:
                 yield req
                 vitals_time = self.triangular_time(1.0, 3.0, 8.0)
                 yield self.env.timeout(vitals_time)
+                self.kpi.resource_busy_time['health_aides'] += vitals_time
             
             vitals_wait = patient.vitals_time - gate_start - verification_time
             self.kpi.vitals_wait_times.append(vitals_wait)
@@ -521,12 +531,14 @@ class DRMC_OPD_Simulation:
                 
                 self.kpi.registration_wait_times.append(reg_wait)
                 self.kpi.registration_service_times.append(reg_service)
+                self.kpi.resource_busy_time['registration_staff'] += registration_time
             
             # ========== STAGE 4: Sub-Clinic Check-in ==========
             with self.clinic_routing.request(priority=patient.priority) as req:
                 yield req
                 routing_time = self.triangular_time(0.5, 2.0, 5.0)
                 yield self.env.timeout(routing_time)
+                self.kpi.resource_busy_time['clinic_routing'] += routing_time
             
             # Sub-clinic check-in (nursing staff)
             clinic_nursing = self.sub_clinic_nursing.get(patient.clinic, self.sub_clinic_nursing['Internal Medicine'])
@@ -535,6 +547,7 @@ class DRMC_OPD_Simulation:
                 checkin_time = self.triangular_time(0.5, 1.5, 4.0)
                 yield self.env.timeout(checkin_time)
                 patient.clinic_checkin_time = self.env.now
+                self.kpi.resource_busy_time['sub_clinic_nursing'] += checkin_time
             
             # ========== STAGE 5: Doctor Consultation ==========
             clinic_pool = self.physician_pools.get(patient.clinic, self.physician_pools['Internal Medicine'])
@@ -564,8 +577,12 @@ class DRMC_OPD_Simulation:
                 priority=patient.priority
             )
             
+            clinic_queue_start = self.env.now
             with physician_req as req:
                 yield req
+                clinic_queue_wait = self.env.now - clinic_queue_start
+                self.kpi.clinic_wait_times.append(clinic_queue_wait)
+                
                 patient.consultation_start_time = self.env.now
                 
                 # Consultation service time (triangular distribution from proposal)
@@ -580,6 +597,7 @@ class DRMC_OPD_Simulation:
                 
                 self.kpi.consultation_wait_times.append(cons_wait)
                 self.kpi.consultation_service_times.append(cons_service)
+                self.kpi.resource_busy_time['physicians'] += consultation_time
             
             # ========== STAGE 6: Post-Consultation Routing ==========
             # Determine post-consultation path
@@ -661,10 +679,13 @@ class DRMC_OPD_Simulation:
             patient_record['exit_reason'] = 'interrupted'
             patient_record['error'] = str(e)
             self.kpi.patient_records.append(patient_record)
+        finally:
+            if patient.arrival_time < TIME_8AM:
+                self.active_pre_opening = max(0, self.active_pre_opening - 1)
     
-    def doctor_freeze_process(self):
+    def doctor_interruption_process(self):
         """
-        Simulate doctor freeze events where physicians are pulled to ER/ward duties.
+        Simulate doctor staffing interruption events where physicians are pulled to ER/ward duties.
         Triggers 1-2 times per day per clinic, lasting 3-5 hours.
         Models these calls as a partial capacity reduction where doctor resources are
         temporarily reduced by approximately 25% (meaning 75% of staffing remains active).
@@ -672,39 +693,39 @@ class DRMC_OPD_Simulation:
         while True:
             # Wait for random interval until next freeze event
             # Average of 1.5 per day, so ~480 minutes between events on average
-            time_to_freeze = np.random.exponential(480 / self.config.doctor_freeze_frequency)
-            yield self.env.timeout(time_to_freeze)
+            time_to_interruption = np.random.exponential(480 / self.config.doctor_interruption_frequency)
+            yield self.env.timeout(time_to_interruption)
             
             # Only trigger during operational hours
             if self.env.now < TIME_8AM or self.env.now > TIME_5PM:
                 continue
             
-            # Pick a random clinic to freeze
+            # Pick a random clinic to interrupt
             clinics = list(self.physician_pools.keys())
-            frozen_clinic = np.random.choice(clinics)
+            interrupted_clinic = np.random.choice(clinics)
             
-            freeze_start = self.env.now
+            interruption_start = self.env.now
             
-            # Freeze duration: triangular(180, 240, 300) minutes = 3-5 hours
-            freeze_duration = self.triangular_time(
-                self.config.doctor_freeze_min_duration,
-                self.config.doctor_freeze_mode_duration,
-                self.config.doctor_freeze_max_duration
+            # Interruption duration: triangular(180, 240, 300) minutes = 3-5 hours
+            interruption_duration = self.triangular_time(
+                self.config.doctor_interruption_min_duration,
+                self.config.doctor_interruption_mode_duration,
+                self.config.doctor_interruption_max_duration
             )
             
-            # Record freeze event
-            self.kpi.doctor_freeze_events.append({
-                'clinic': frozen_clinic,
-                'start_time': freeze_start,
-                'duration': freeze_duration,
-                'start_hour': 5 + freeze_start / 60  # Convert to hour from 5 AM
+            # Record interruption event
+            self.kpi.doctor_interruption_events.append({
+                'clinic': interrupted_clinic,
+                'start_time': interruption_start,
+                'duration': interruption_duration,
+                'start_hour': 5 + interruption_start / 60  # Convert to hour from 5 AM
             })
             
             # Mark clinic as partially active (for wait time impact/KPI purposes)
-            self.clinic_physicians_active[frozen_clinic] = False
+            self.clinic_physicians_active[interrupted_clinic] = False
             
             # Apply 25% capacity reduction (leaving ~75% active)
-            pool = self.physician_pools[frozen_clinic]
+            pool = self.physician_pools[interrupted_clinic]
             normal_morning_cap = pool['morning'].capacity
             normal_afternoon_cap = pool['afternoon'].capacity
             
@@ -714,17 +735,14 @@ class DRMC_OPD_Simulation:
             pool['morning']._capacity = reduced_morning_cap
             pool['afternoon']._capacity = reduced_afternoon_cap
             
-            yield self.env.timeout(freeze_duration)
+            yield self.env.timeout(interruption_duration)
             
             # Restore normal capacities and trigger queue processing
             pool['morning']._capacity = normal_morning_cap
             pool['afternoon']._capacity = normal_afternoon_cap
             
-            pool['morning']._trigger_put(None)
-            pool['afternoon']._trigger_put(None)
-            
             # Restore clinic availability
-            self.clinic_physicians_active[frozen_clinic] = True
+            self.clinic_physicians_active[interrupted_clinic] = True
     
     def queue_monitoring_process(self):
         """
@@ -737,11 +755,7 @@ class DRMC_OPD_Simulation:
             
             # Pre-opening queue (before 8 AM)
             if current_time < TIME_8AM:
-                # Count arrivals in pre-opening period not yet processed
-                pre_opening_count = sum(1 for r in self.kpi.patient_records 
-                                        if r.get('arrival_time', 0) < TIME_8AM and 
-                                        r.get('exit_reason') != 'completed')
-                self.kpi.pre_opening_queue.append((current_time, pre_opening_count))
+                self.kpi.pre_opening_queue.append((current_time, self.active_pre_opening))
             
             # Gate queue
             gate_queue = len(self.gate_security.queue)
@@ -754,6 +768,19 @@ class DRMC_OPD_Simulation:
             # Clinic queue
             clinic_queue = sum(len(pool['morning'].queue) for pool in self.physician_pools.values())
             self.kpi.clinic_queue_history.append((current_time, clinic_queue))
+            
+            # Track capacity-minutes dynamically
+            self.kpi.resource_total_time['gate_security'] += self.gate_security.capacity
+            self.kpi.resource_total_time['verification_staff'] += self.verification_staff.capacity
+            self.kpi.resource_total_time['health_aides'] += self.health_aides.capacity
+            self.kpi.resource_total_time['registration_staff'] += self.registration_staff.capacity
+            self.kpi.resource_total_time['clinic_routing'] += self.clinic_routing.capacity
+            self.kpi.resource_total_time['sub_clinic_nursing'] += sum(r.capacity for r in self.sub_clinic_nursing.values())
+            
+            if current_time < TIME_8AM + 240:
+                self.kpi.resource_total_time['physicians'] += sum(pool['morning'].capacity for pool in self.physician_pools.values())
+            else:
+                self.kpi.resource_total_time['physicians'] += sum(pool['afternoon'].capacity for pool in self.physician_pools.values())
             
             # Sample every minute
             yield self.env.timeout(1)
@@ -790,9 +817,9 @@ def run_simulation(config: SimulationConfig, progress_callback=None) -> KPIColle
         # Start background processes
         env.process(sim.queue_monitoring_process())
         
-        # Start doctor freeze process (only if enabled or baseline)
+        # Start doctor staffing interruption process (only if enabled or baseline)
         if config.scenario_b_enabled or config.num_replications > 0:
-            env.process(sim.doctor_freeze_process())
+            env.process(sim.doctor_interruption_process())
         
         # Determine if this is Monday (for higher arrival rates)
         is_monday = (config.simulation_day % 7 == 1)  # Day 1 = Monday
@@ -870,8 +897,8 @@ def aggregate_results(results_list: List[KPICollector]) -> Dict[str, Any]:
         'patients_arrived_total': sum(r.patients_arrived for r in results_list) / len(results_list),
         'throughput_rate': np.mean([r.patients_completed / max(1, r.patients_arrived) for r in results_list]),
         
-        'freeze_events_count': safe_mean([len(r.doctor_freeze_events) for r in results_list]),
-        'freeze_total_duration': safe_mean([sum(e['duration'] for e in r.doctor_freeze_events) for r in results_list]),
+        'interruption_events_count': safe_mean([len(r.doctor_interruption_events) for r in results_list]),
+        'interruption_total_duration': safe_mean([sum(e['duration'] for e in r.doctor_interruption_events) for r in results_list]),
         
         'gate_queue_max': max([max([q for t, q in r.gate_queue_history], default=0) for r in results_list]),
         'registration_queue_max': max([max([q for t, q in r.registration_queue_history], default=0) for r in results_list]),
@@ -996,26 +1023,26 @@ def create_sidebar_config():
     st.sidebar.divider()
     
     # Doctor Freeze Parameters
-    st.sidebar.subheader("🧊 Doctor Freeze Events")
-    config.doctor_freeze_frequency = st.sidebar.slider(
-        "Freeze Frequency (per day)", 0.5, 3.0, 1.5, 0.5,
+    st.sidebar.subheader("🧊 Doctor Staffing Interruptions")
+    config.doctor_interruption_frequency = st.sidebar.slider(
+        "Interruption Frequency (per day)", 0.5, 3.0, 1.5, 0.5,
         help="How often doctors are pulled to ER/ward duties"
     )
     
-    freeze_col1, freeze_col2 = st.sidebar.columns(2)
-    with freeze_col1:
-        config.doctor_freeze_min_duration = st.slider(
+    interruption_col1, interruption_col2 = st.sidebar.columns(2)
+    with interruption_col1:
+        config.doctor_interruption_min_duration = st.slider(
             "Min Duration (min)", 120, 240, 180,
-            help="Minimum freeze duration"
+            help="Minimum interruption duration"
         )
-    with freeze_col2:
-        config.doctor_freeze_max_duration = st.slider(
+    with interruption_col2:
+        config.doctor_interruption_max_duration = st.slider(
             "Max Duration (min)", 240, 360, 300,
-            help="Maximum freeze duration"
+            help="Maximum interruption duration"
         )
-    config.doctor_freeze_mode_duration = st.slider(
+    config.doctor_interruption_mode_duration = st.slider(
         "Mode Duration (min)", 180, 300, 240,
-        help="Most likely freeze duration"
+        help="Most likely interruption duration"
     )
     
     st.sidebar.divider()
@@ -1093,9 +1120,9 @@ def create_kpi_cards(aggregated_results: Dict[str, Any]):
     
     with col4:
         st.metric(
-            label="Doctor Freeze Events",
-            value=f"{aggregated_results.get('freeze_events_count', 0):.1f}",
-            delta=f"{aggregated_results.get('freeze_total_duration', 0)/60:.1f} hrs total"
+            label="Doctor Staffing Interruptions",
+            value=f"{aggregated_results.get('interruption_events_count', 0):.1f}",
+            delta=f"{aggregated_results.get('interruption_total_duration', 0)/60:.1f} hrs total"
         )
 
 
@@ -1275,14 +1302,14 @@ def plot_consultation_service_time(kpi: KPICollector):
     st.plotly_chart(fig, width="stretch")
 
 
-def plot_doctor_freeze_analysis(kpi: KPICollector):
+def plot_doctor_interruption_analysis(kpi: KPICollector):
     """Visualize doctor freeze events."""
     
-    if not kpi.doctor_freeze_events:
-        st.info("No doctor freeze events recorded in this simulation run")
+    if not kpi.doctor_interruption_events:
+        st.info("No doctor staffing interruptions recorded in this simulation run")
         return
     
-    df = pd.DataFrame(kpi.doctor_freeze_events)
+    df = pd.DataFrame(kpi.doctor_interruption_events)
     df['end_time'] = df['start_time'] + df['duration']
     df['start_hour'] = 5 + df['start_time'] / 60
     df['end_hour'] = 5 + df['end_time'] / 60
@@ -1290,7 +1317,7 @@ def plot_doctor_freeze_analysis(kpi: KPICollector):
     fig = px.timeline(
         df, x_start='start_hour', x_end='end_hour', y='clinic',
         color='clinic',
-        title='Doctor Freeze Events Throughout the Day',
+        title='Doctor Staffing Interruptions Throughout the Day',
         labels={'start_hour': 'Hour', 'clinic': 'Clinic'}
     )
     
@@ -1306,51 +1333,54 @@ def plot_doctor_freeze_analysis(kpi: KPICollector):
     # Summary statistics
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Total Freeze Events", len(kpi.doctor_freeze_events))
+        st.metric("Total Interruption Events", len(kpi.doctor_interruption_events))
     with col2:
-        total_duration = sum(e['duration'] for e in kpi.doctor_freeze_events)
-        st.metric("Total Freeze Duration", f"{total_duration/60:.1f} hours")
+        total_duration = sum(e['duration'] for e in kpi.doctor_interruption_events)
+        st.metric("Total Interruption Duration", f"{total_duration/60:.1f} hours")
     with col3:
-        avg_duration = total_duration / len(kpi.doctor_freeze_events) if kpi.doctor_freeze_events else 0
-        st.metric("Average Freeze Duration", f"{avg_duration:.0f} minutes")
+        avg_duration = total_duration / len(kpi.doctor_interruption_events) if kpi.doctor_interruption_events else 0
+        st.metric("Average Interruption Duration", f"{avg_duration:.0f} minutes")
 
 
 def plot_resource_utilization(kpi: KPICollector):
     """Display resource utilization metrics."""
     
-    # Create placeholder utilization data based on queue dynamics
-    # In a real implementation, this would track actual resource busy time
-    
     resources = ['Gate Security', 'Verification Staff', 'Health Aides', 
-                 'Registration Staff', 'Clinic Routing', 'Sub-Clinic Nursing']
+                 'Registration Staff', 'Clinic Routing', 'Sub-Clinic Nursing', 'OPD Physicians']
     
-    # Estimate utilization based on queue lengths and processing times
-    base_utilization = [0.65, 0.75, 0.70, 0.80, 0.55, 0.60]
+    # Map display names to KPI keys
+    resource_keys = {
+        'Gate Security': 'gate_security',
+        'Verification Staff': 'verification_staff',
+        'Health Aides': 'health_aides',
+        'Registration Staff': 'registration_staff',
+        'Clinic Routing': 'clinic_routing',
+        'Sub-Clinic Nursing': 'sub_clinic_nursing',
+        'OPD Physicians': 'physicians'
+    }
     
-    # Adjust for maximum queue observed
-    if kpi.gate_queue_history:
-        max_gate = max([q for t, q in kpi.gate_queue_history])
-        base_utilization[0] = min(0.95, 0.50 + max_gate * 0.02)
-        base_utilization[1] = min(0.95, 0.55 + max_gate * 0.02)
-    
-    if kpi.registration_queue_history:
-        max_reg = max([q for t, q in kpi.registration_queue_history])
-        base_utilization[3] = min(0.95, 0.60 + max_reg * 0.015)
+    utilization_list = []
+    for r in resources:
+        key = resource_keys[r]
+        busy = kpi.resource_busy_time.get(key, 0.0)
+        total = kpi.resource_total_time.get(key, 0.0)
+        if total > 0:
+            util = (busy / total) * 100
+        else:
+            util = 0.0
+        utilization_list.append(min(100.0, util))
     
     utilization_df = pd.DataFrame({
         'Resource': resources,
-        'Utilization (%)': [u * 100 for u in base_utilization]
+        'Utilization (%)': utilization_list
     })
-    
-    colors = ['#e74c3c' if u > 80 else '#f39c12' if u > 60 else '#2ecc71' 
-              for u in utilization_df['Utilization (%)']]
     
     fig = px.bar(
         utilization_df, x='Resource', y='Utilization (%)',
-        title='Estimated Resource Utilization Rates',
+        title='Resource Utilization Rates',
         color='Utilization (%)',
         color_continuous_scale=['#2ecc71', '#f39c12', '#e74c3c'],
-        range_color=[40, 100]
+        range_color=[0, 100]
     )
     
     # Add threshold line
@@ -1454,7 +1484,7 @@ def display_scenario_comparison(stored_results: Dict[str, Dict]):
         'Gate Wait (min)': [stored_results[s].get('gate_wait_mean', 0) for s in scenarios],
         'Reg Wait (min)': [stored_results[s].get('registration_wait_mean', 0) for s in scenarios],
         'Clinic Wait (min)': [stored_results[s].get('clinic_wait_mean', 0) for s in scenarios],
-        'Freeze Events': [stored_results[s].get('freeze_events_count', 0) for s in scenarios]
+        'Staffing Interruptions': [stored_results[s].get('interruption_events_count', 0) for s in scenarios]
     })
     
     st.subheader("📊 Scenario Comparison")
@@ -1464,7 +1494,7 @@ def display_scenario_comparison(stored_results: Dict[str, Dict]):
     fig = make_subplots(
         rows=2, cols=2,
         subplot_titles=('Average Length of Stay', 'Waiting Times', 
-                        'Throughput Rate', 'Doctor Freeze Events')
+                        'Throughput Rate', 'Doctor Staffing Interruptions')
     )
     
     # LoS comparison
@@ -1495,8 +1525,8 @@ def display_scenario_comparison(stored_results: Dict[str, Dict]):
     # Freeze events comparison
     fig.add_trace(
         go.Bar(x=scenarios, 
-               y=[stored_results[s].get('freeze_events_count', 0) for s in scenarios],
-               marker_color='#e67e22', name='Freeze Events'),
+               y=[stored_results[s].get('interruption_events_count', 0) for s in scenarios],
+               marker_color='#e67e22', name='Staffing Interruptions'),
         row=2, col=2
     )
     
@@ -1733,8 +1763,8 @@ def main():
             st.divider()
             
             # Doctor Freeze Analysis
-            st.subheader("Doctor Freeze Event Analysis")
-            plot_doctor_freeze_analysis(kpi)
+            st.subheader("Doctor Staffing Interruption Analysis")
+            plot_doctor_interruption_analysis(kpi)
             
             st.divider()
             
@@ -1764,7 +1794,7 @@ def main():
             
             4. **Consultation Service Times** - Distribution of time spent with physicians
             
-            5. **Doctor Freeze Timeline** - Gantt chart showing when doctors are unavailable
+            5. **Doctor Staffing Interruption Timeline** - Gantt chart showing when doctors are pulled for emergency/ward duties
             
             6. **Resource Utilization** - Bar chart showing busy time percentage per staff type
             
@@ -1827,12 +1857,12 @@ def main():
         config_data['Parameter'].extend(['Dawn Surge', 'Peak Rate', 'Midday', 'Afternoon'])
         config_data['Value'].extend([config.dawn_surge_rate, config.peak_rate_normal, config.midday_rate, config.afternoon_rate])
         
-        # Freeze parameters
-        config_data['Category'].extend(['Doctor Freeze'] * 4)
+        # Interruption parameters
+        config_data['Category'].extend(['Staffing Interruptions'] * 4)
         config_data['Parameter'].extend(['Frequency', 'Min Duration', 'Mode Duration', 'Max Duration'])
         config_data['Value'].extend([
-            config.doctor_freeze_frequency, config.doctor_freeze_min_duration,
-            config.doctor_freeze_mode_duration, config.doctor_freeze_max_duration
+            config.doctor_interruption_frequency, config.doctor_interruption_min_duration,
+            config.doctor_interruption_mode_duration, config.doctor_interruption_max_duration
         ])
         
         # Patient mix
@@ -1879,14 +1909,14 @@ def main():
         
         dist_data = {
             'Process': ['Gate Verification', 'New Registration', 'Returning Registration', 
-                        'Consultation Service', 'Doctor Freeze Duration'],
+                        'Consultation Service', 'Doctor Interruption Duration'],
             'Distribution': ['Triangular', 'Triangular', 'Triangular', 'Triangular', 'Triangular'],
             'Parameters (a, b, c)': [
                 '(0.5, 2.5, 15) min',
                 '(7, 17.5, 60) min',
                 '(1, 4, 20) min',
                 '(5, 15, 45) min',
-                f'({config.doctor_freeze_min_duration}, {config.doctor_freeze_mode_duration}, {config.doctor_freeze_max_duration}) min'
+                f'({config.doctor_interruption_min_duration}, {config.doctor_interruption_mode_duration}, {config.doctor_interruption_max_duration}) min'
             ],
             'Source': ['Proposal Doc', 'Proposal Doc', 'Proposal Doc', 'Proposal Doc', 'Proposal Doc']
         }
