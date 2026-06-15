@@ -1,0 +1,22 @@
+# DRMC OPD Simulation - Python Dependencies
+# ==========================================
+
+# Discrete Event Simulation
+simpy>=4.0.1
+
+# Web Interface
+streamlit>=1.28.0
+
+# Data Analysis & Statistics
+numpy>=1.24.0
+scipy>=1.11.0
+pandas>=2.0.0
+
+# Interactive Visualization
+plotly>=5.17.0
+
+# Optional: PDF Reading (for documentation purposes)
+pdfplumber>=0.10.0
+
+# Optional: Progress bars
+tqdm>=4.66.0
