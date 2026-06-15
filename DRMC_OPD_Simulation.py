@@ -140,6 +140,7 @@ class KPICollector:
     
     # Waiting times
     gate_wait_times: List[float] = field(default_factory=list)
+    gate_verify_vitals_times: List[float] = field(default_factory=list)
     vitals_wait_times: List[float] = field(default_factory=list)
     registration_wait_times: List[float] = field(default_factory=list)
     clinic_wait_times: List[float] = field(default_factory=list)
@@ -508,6 +509,11 @@ class DRMC_OPD_Simulation:
                 yield self.env.timeout(vitals_time)
                 self.kpi.resource_busy_time['health_aides'] += vitals_time
             
+            # After both verification and vitals are done:
+            verify_vitals_end = self.env.now
+            gate_verify_vitals_time = verify_vitals_end - patient.arrival_time
+            self.kpi.gate_verify_vitals_times.append(gate_verify_vitals_time)
+            
             vitals_wait = patient.vitals_time - gate_start - verification_time
             self.kpi.vitals_wait_times.append(vitals_wait)
             
@@ -664,6 +670,7 @@ class DRMC_OPD_Simulation:
             self.kpi.length_of_stay.append(los)
             
             patient_record['gate_wait'] = self.kpi.gate_wait_times[-1] if self.kpi.gate_wait_times else 0
+            patient_record['gate_verify_vitals'] = self.kpi.gate_verify_vitals_times[-1] if self.kpi.gate_verify_vitals_times else 0
             patient_record['registration_wait'] = self.kpi.registration_wait_times[-1] if self.kpi.registration_wait_times else 0
             patient_record['clinic_wait'] = self.kpi.clinic_wait_times[-1] if self.kpi.clinic_wait_times else 0
             patient_record['consultation_wait'] = cons_wait
@@ -877,6 +884,10 @@ def aggregate_results(results_list: List[KPICollector]) -> Dict[str, Any]:
         'gate_wait_mean': safe_mean(get_replication_means('gate_wait_times')),
         'gate_wait_std': safe_std(get_replication_means('gate_wait_times')),
         'gate_wait_p95': np.median([safe_percentile(r.gate_wait_times, 95) for r in results_list]),
+        
+        'gate_verify_vitals_mean': safe_mean(get_replication_means('gate_verify_vitals_times')),
+        'gate_verify_vitals_std': safe_std(get_replication_means('gate_verify_vitals_times')),
+        'gate_verify_vitals_p95': np.median([safe_percentile(r.gate_verify_vitals_times, 95) for r in results_list]),
         
         'registration_wait_mean': safe_mean(get_replication_means('registration_wait_times')),
         'registration_wait_std': safe_std(get_replication_means('registration_wait_times')),
@@ -1209,21 +1220,21 @@ def plot_queue_evolution(kpi: KPICollector):
 def plot_waiting_times(aggregated_results: Dict[str, Any]):
     """Plot waiting times by stage."""
     
-    stages = ['Gate', 'Registration', 'Clinic', 'Consultation']
+    stages = ['Gate & Verification', 'Registration', 'Clinic', 'Consultation']
     means = [
-        aggregated_results.get('gate_wait_mean', 0),
+        aggregated_results.get('gate_verify_vitals_mean', 0),
         aggregated_results.get('registration_wait_mean', 0),
         aggregated_results.get('clinic_wait_mean', 0),
         aggregated_results.get('consultation_wait_mean', 0)
     ]
     stds = [
-        aggregated_results.get('gate_wait_std', 0),
+        aggregated_results.get('gate_verify_vitals_std', 0),
         aggregated_results.get('registration_wait_std', 0),
         aggregated_results.get('clinic_wait_std', 0),
         0
     ]
     p95s = [
-        aggregated_results.get('gate_wait_p95', 0),
+        aggregated_results.get('gate_verify_vitals_p95', 0),
         aggregated_results.get('registration_wait_p95', 0),
         aggregated_results.get('clinic_wait_p95', 0),
         aggregated_results.get('consultation_wait_mean', 0) * 1.5
@@ -1481,7 +1492,7 @@ def display_scenario_comparison(stored_results: Dict[str, Dict]):
         'Avg LoS (min)': [stored_results[s].get('los_mean', 0) for s in scenarios],
         '95th LoS (min)': [stored_results[s].get('los_p95', 0) for s in scenarios],
         'Throughput': [f"{stored_results[s].get('throughput_rate', 0)*100:.1f}%" for s in scenarios],
-        'Gate Wait (min)': [stored_results[s].get('gate_wait_mean', 0) for s in scenarios],
+        'Gate & Verification Wait (min)': [stored_results[s].get('gate_verify_vitals_mean', 0) for s in scenarios],
         'Reg Wait (min)': [stored_results[s].get('registration_wait_mean', 0) for s in scenarios],
         'Clinic Wait (min)': [stored_results[s].get('clinic_wait_mean', 0) for s in scenarios],
         'Staffing Interruptions': [stored_results[s].get('interruption_events_count', 0) for s in scenarios]
@@ -1489,6 +1500,9 @@ def display_scenario_comparison(stored_results: Dict[str, Dict]):
     
     st.subheader("📊 Scenario Comparison")
     st.dataframe(comparison_df, width="stretch", hide_index=True)
+    
+    csv = comparison_df.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download comparison CSV", csv, "scenario_comparison.csv", "text/csv")
     
     # Visual comparison
     fig = make_subplots(
@@ -1505,12 +1519,16 @@ def display_scenario_comparison(stored_results: Dict[str, Dict]):
     )
     
     # Waiting times comparison
-    wait_stages = ['Gate Wait', 'Reg Wait', 'Clinic Wait']
-    for stage, color in [('Gate Wait', '#e74c3c'), ('Reg Wait', '#2ecc71'), ('Clinic Wait', '#9b59b6')]:
+    wait_configs = [
+        ('Gate & Verification Wait', 'gate_verify_vitals_mean', '#e74c3c'),
+        ('Reg Wait', 'registration_wait_mean', '#2ecc71'),
+        ('Clinic Wait', 'clinic_wait_mean', '#9b59b6')
+    ]
+    for label, key, color in wait_configs:
         fig.add_trace(
             go.Bar(x=scenarios, 
-                   y=[stored_results[s].get(stage.lower().replace(' ', '_') + '_mean', 0) for s in scenarios],
-                   name=stage, marker_color=color),
+                   y=[stored_results[s].get(key, 0) for s in scenarios],
+                   name=label, marker_color=color),
             row=1, col=2
         )
     
@@ -1599,6 +1617,31 @@ def main():
     # Create sidebar configuration
     config = create_sidebar_config()
     st.session_state.config = config
+    
+    # Baseline Scenario Shortcut
+    st.sidebar.divider()
+    st.sidebar.subheader("📌 Baseline Run Control")
+    if st.sidebar.button("📌 Save as Baseline", use_container_width=True, help="Lock current configuration and run/save as Baseline scenario"):
+        if st.session_state.simulation_results is not None:
+            st.session_state.stored_scenarios["Baseline"] = (
+                st.session_state.simulation_results['aggregated']
+            )
+            st.sidebar.success("📌 Baseline saved from current run!")
+        else:
+            with st.sidebar.status("Running baseline simulation...") as status:
+                kpi_results = run_simulation(config)
+                aggregated = aggregate_results([kpi_results])
+                st.session_state.stored_scenarios["Baseline"] = aggregated
+                st.session_state.simulation_results = {
+                    'kpi': kpi_results,
+                    'aggregated': aggregated,
+                    'config': config
+                }
+                status.update(label="📌 Baseline simulated and saved!", state="complete")
+            try:
+                st.rerun()
+            except AttributeError:
+                st.experimental_rerun()
     
     # Tab layout
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -1743,7 +1786,7 @@ def main():
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Avg Gate Wait", f"{aggregated.get('gate_wait_mean', 0):.1f} min")
+                st.metric("Avg Gate & Verification Wait", f"{aggregated.get('gate_verify_vitals_mean', 0):.1f} min")
             with col2:
                 st.metric("Avg Registration Wait", f"{aggregated.get('registration_wait_mean', 0):.1f} min")
             with col3:
@@ -1935,6 +1978,19 @@ def main():
         Based on: DRMC_OPD_Simulation_Proposal.pdf
         
         For questions or details, refer to the project documentation.
+        """)
+    
+    # Modeling Assumptions Expander
+    st.markdown("---")
+    with st.expander("📌 Modeling Assumptions"):
+        st.markdown("""
+        The simulation model is constructed based on the following key operational assumptions:
+        - **Pooled Poisson Arrivals**: Arrivals are pooled Poisson (no per-clinic differentiation).
+        - **Consultation Service Time**: Consultation service time is Triangular(5, 15, 45) minutes.
+        - **Doctor Freeze Events**: Emergency or ward duties temporarily reduce physician capacity to 75% for Triangular(180, 240, 300) minutes.
+        - **Priority Queue Preemption**: Priority patients preempt the queue but do not interrupt active consultations.
+        - **Ancillary Services**: We do not model diagnostic/pharmacy turnaround in detail (out of scope).
+        - **Rescheduling**: We do not model late-arrival rescheduling (out of scope).
         """)
 
 
