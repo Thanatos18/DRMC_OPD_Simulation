@@ -305,7 +305,7 @@ class DRMC_OPD_Simulation:
             morning_docs = max(2, int(total_physicians * proportion))
             self.physician_pools[clinic] = {
                 'morning': simpy.PriorityResource(self.env, capacity=morning_docs),
-                'afternoon': simpy.Resource(self.env, capacity=max(1, int(self.config.afternoon_physician_count * proportion))),
+                'afternoon': simpy.PriorityResource(self.env, capacity=max(1, int(self.config.afternoon_physician_count * proportion))),
                 'patients_seen': {'morning': 0, 'afternoon': 0},
                 'session_cap': self.config.physician_session_cap if self.config.scenario_b_enabled else 100
             }
@@ -666,10 +666,8 @@ class DRMC_OPD_Simulation:
         """
         Simulate doctor freeze events where physicians are pulled to ER/ward duties.
         Triggers 1-2 times per day per clinic, lasting 3-5 hours.
-        
-        Note: In SimPy, resource capacity cannot be changed dynamically.
-        We track freeze events for KPI purposes and model their impact
-        through additional consultation wait times.
+        Models these calls as a partial capacity reduction where doctor resources are
+        temporarily reduced by approximately 25% (meaning 75% of staffing remains active).
         """
         while True:
             # Wait for random interval until next freeze event
@@ -702,10 +700,28 @@ class DRMC_OPD_Simulation:
                 'start_hour': 5 + freeze_start / 60  # Convert to hour from 5 AM
             })
             
-            # Mark clinic as frozen (for wait time impact calculation)
+            # Mark clinic as partially active (for wait time impact/KPI purposes)
             self.clinic_physicians_active[frozen_clinic] = False
             
+            # Apply 25% capacity reduction (leaving ~75% active)
+            pool = self.physician_pools[frozen_clinic]
+            normal_morning_cap = pool['morning'].capacity
+            normal_afternoon_cap = pool['afternoon'].capacity
+            
+            reduced_morning_cap = max(1, int(round(normal_morning_cap * 0.75)))
+            reduced_afternoon_cap = max(1, int(round(normal_afternoon_cap * 0.75)))
+            
+            pool['morning']._capacity = reduced_morning_cap
+            pool['afternoon']._capacity = reduced_afternoon_cap
+            
             yield self.env.timeout(freeze_duration)
+            
+            # Restore normal capacities and trigger queue processing
+            pool['morning']._capacity = normal_morning_cap
+            pool['afternoon']._capacity = normal_afternoon_cap
+            
+            pool['morning']._trigger_put(None)
+            pool['afternoon']._trigger_put(None)
             
             # Restore clinic availability
             self.clinic_physicians_active[frozen_clinic] = True
